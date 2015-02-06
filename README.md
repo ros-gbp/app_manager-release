@@ -1,3 +1,24 @@
+## app_manager (indigo) - 1.0.3-0
+
+The packages in the `app_manager` repository were released into the `indigo` distro by running `/usr/bin/bloom-release app_manager --rosdistro indigo --track indigo --edit` on `Fri, 06 Feb 2015 14:42:17 -0000`
+
+The `app_manager` package was released.
+
+Version of package(s) in repository `app_manager`:
+- upstream repository: https://github.com/pr2/app_manager.git
+- release repository: unknown
+- rosdistro version: `null`
+- old version: `null`
+- new version: `1.0.3-0`
+
+Versions of tools used:
+- bloom version: `0.5.17`
+- catkin_pkg version: `0.2.6`
+- rosdep version: `0.11.1`
+- rosdistro version: `0.4.0`
+- vcstools version: `0.1.36`
+
+
 ## app_manager (hydro) - 1.0.2-0
 
 The packages in the `app_manager` repository were released into the `hydro` distro by running `/usr/bin/bloom-release --rosdistro hydro --track hydro app_manager` on `Tue, 14 Oct 2014 16:06:17 -0000`
