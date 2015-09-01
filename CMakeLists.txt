@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 2.8.3)
 project(app_manager)
 find_package(catkin REQUIRED COMPONENTS message_runtime std_msgs rospy roslaunch rosgraph rosunit message_generation)
 
+# This will install python libraries
+catkin_python_setup()
+
 catkin_add_nosetests(test/test_app.py)
 catkin_add_nosetests(test/test_app_list.py)
 add_message_files(
@@ -40,7 +43,7 @@ catkin_package(
 )
 
 
-install(PROGRAMS scripts/app_manager scripts/rosget scripts/test_app.py
+install(PROGRAMS scripts/app_manager scripts/rosget scripts/test_app.py bin/appmaster
  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 install(DIRECTORY msg msg_gen scripts src srv srv_gen test
  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
