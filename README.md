@@ -1,3 +1,26 @@
+## app_manager (kinetic) - 1.0.5-0
+
+The packages in the `app_manager` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release app_manager --rosdistro kinetic --track kinetic` on `Wed, 14 Feb 2018 10:46:36 -0000`
+
+The `app_manager` package was released.
+
+Version of package(s) in repository `app_manager`:
+
+- upstream repository: https://github.com/pr2/app_manager.git
+- release repository: unknown
+- rosdistro version: `null`
+- old version: `null`
+- new version: `1.0.5-0`
+
+Versions of tools used:
+
+- bloom version: `0.6.2`
+- catkin_pkg version: `0.3.6`
+- rosdep version: `0.11.8`
+- rosdistro version: `0.6.2`
+- vcstools version: `0.1.39`
+
+
 ## app_manager (indigo) - 1.0.4-0
 
 The packages in the `app_manager` repository were released into the `indigo` distro by running `/usr/bin/bloom-release --rosdistro indigo --track indigo app_manager` on `Tue, 01 Sep 2015 16:45:54 -0000`
