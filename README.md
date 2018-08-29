@@ -1,3 +1,26 @@
+## app_manager (lunar) - 1.1.0-0
+
+The packages in the `app_manager` repository were released into the `lunar` distro by running `/usr/bin/bloom-release app_manager --rosdistro lunar --track lunar` on `Wed, 29 Aug 2018 13:20:12 -0000`
+
+The `app_manager` package was released.
+
+Version of package(s) in repository `app_manager`:
+
+- upstream repository: https://github.com/pr2/app_manager.git
+- release repository: unknown
+- rosdistro version: `null`
+- old version: `null`
+- new version: `1.1.0-0`
+
+Versions of tools used:
+
+- bloom version: `0.6.6`
+- catkin_pkg version: `0.4.6`
+- rosdep version: `0.12.2`
+- rosdistro version: `0.6.8`
+- vcstools version: `0.1.40`
+
+
 ## app_manager (kinetic) - 1.0.5-0
 
 The packages in the `app_manager` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release app_manager --rosdistro kinetic --track kinetic` on `Wed, 14 Feb 2018 10:46:36 -0000`
