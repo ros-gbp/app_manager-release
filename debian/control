@@ -1,0 +1,12 @@
+Source: ros-lunar-app-manager
+Section: misc
+Priority: extra
+Maintainer: ROS Orphaned Package Maintainers <ros-orphaned-packages@googlegroups.com>
+Build-Depends: debhelper (>= 9.0.0), ros-lunar-catkin, ros-lunar-message-generation, ros-lunar-rosgraph, ros-lunar-roslaunch, ros-lunar-rospy, ros-lunar-rosunit
+Homepage: http://ros.org/wiki/app_manager
+Standards-Version: 3.9.2
+
+Package: ros-lunar-app-manager
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-lunar-message-runtime, ros-lunar-rosgraph, ros-lunar-roslaunch, ros-lunar-rospack, ros-lunar-rospy, ros-lunar-rosunit, ros-lunar-std-srvs
+Description: app_manager
