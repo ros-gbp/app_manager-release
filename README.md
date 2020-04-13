@@ -1,3 +1,26 @@
+## app_manager (melodic) - 1.1.1-1
+
+The packages in the `app_manager` repository were released into the `melodic` distro by running `/usr/bin/bloom-release app_manager -y --rosdistro melodic --track melodic` on `Mon, 13 Apr 2020 10:34:33 -0000`
+
+The `app_manager` package was released.
+
+Version of package(s) in repository `app_manager`:
+
+- upstream repository: https://github.com/pr2/app_manager.git
+- release repository: https://github.com/ros-gbp/app_manager-release.git
+- rosdistro version: `1.1.0-0`
+- old version: `1.1.0-0`
+- new version: `1.1.1-1`
+
+Versions of tools used:
+
+- bloom version: `0.9.0`
+- catkin_pkg version: `0.4.16`
+- rosdep version: `0.18.0`
+- rosdistro version: `0.8.0`
+- vcstools version: `0.1.42`
+
+
 ## app_manager (kinetic) - 1.1.1-1
 
 The packages in the `app_manager` repository were released into the `kinetic` distro by running `/usr/bin/bloom-release app_manager -y --rosdistro kinetic --track kinetic` on `Mon, 13 Apr 2020 10:29:55 -0000`
