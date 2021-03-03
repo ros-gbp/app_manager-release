@@ -1,0 +1,12 @@
+Source: ros-noetic-app-manager
+Section: misc
+Priority: optional
+Maintainer: ROS Orphaned Package Maintainers <ros-orphaned-packages@googlegroups.com>
+Build-Depends: debhelper (>= 9.0.0), ros-noetic-catkin, ros-noetic-message-generation, ros-noetic-rosgraph, ros-noetic-roslaunch, ros-noetic-rospy, ros-noetic-rosunit
+Homepage: http://ros.org/wiki/app_manager
+Standards-Version: 3.9.2
+
+Package: ros-noetic-app-manager
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-noetic-message-runtime, ros-noetic-rosgraph, ros-noetic-roslaunch, ros-noetic-rospack, ros-noetic-rospy, ros-noetic-rosunit, ros-noetic-std-srvs
+Description: app_manager
