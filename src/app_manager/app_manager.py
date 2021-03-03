@@ -33,32 +33,101 @@
 # Revision $Id: app_manager.py 14948 2011-09-07 19:25:54Z pratkanis $
 
 # author: leibs
+import sys
 
-import thread
+if sys.version_info[0] == 3:
+    import _thread as thread  # python3 renamed from thread to _thread
+else:
+    import thread
+
 import time
+import yaml
 
 import rosgraph.names
 import rospy
 
+import roslaunch.config
+import roslaunch.core
 import roslaunch.parent
 import roslaunch.pmon
+import roslaunch.xmlloader
 
+import roslaunch.loader
 from std_srvs.srv import Empty, EmptyResponse
 
-from .app import AppDefinition, load_AppDefinition_by_name
+from .app import AppDefinition, find_resource, load_AppDefinition_by_name
 from .exceptions import LaunchException, AppException, InvalidAppException, NotFoundException
 from .master_sync import MasterSync
 from .msg import App, AppList, StatusCodes, AppStatus, AppInstallationState, ExchangeApp
 from .srv import StartApp, StopApp, ListApps, ListAppsResponse, StartAppResponse, StopAppResponse, InstallApp, UninstallApp, GetInstallationState, UninstallAppResponse, InstallAppResponse, GetInstallationStateResponse, GetAppDetails, GetAppDetailsResponse
 
+
+def _load_config_default(
+        roslaunch_files, port, roslaunch_strs=None, loader=None, verbose=False,
+        assign_machines=True, ignore_unset_args=False
+):
+    config = roslaunch.config.ROSLaunchConfig()
+    if port:
+        config.master.uri = rosgraph.network.create_local_xmlrpc_uri(port)
+
+    loader = loader or roslaunch.xmlloader.XmlLoader()
+    loader.ignore_unset_args = ignore_unset_args
+
+    # load the roscore file first. we currently have
+    # last-declaration wins rules.  roscore is just a
+    # roslaunch file with special load semantics
+    roslaunch.config.load_roscore(loader, config, verbose=verbose)
+
+    # load the roslaunch_files into the config
+    for f in roslaunch_files:
+        if isinstance(f, tuple):
+            f, args = f
+        else:
+            args = None
+        try:
+            rospy.loginfo('loading config file %s' % f)
+            loader.load(f, config, argv=args, verbose=verbose)
+        except roslaunch.xmlloader.XmlParseException as e:
+            raise roslaunch.core.RLException(e)
+        except roslaunch.loader.LoadException as e:
+            raise roslaunch.core.RLException(e)
+    # we need this for the hardware test systems, which builds up
+    # roslaunch launch files in memory
+    if roslaunch_strs:
+        for launch_str in roslaunch_strs:
+            try:
+                rospy.loginfo('loading config file from string')
+                loader.load_string(launch_str, config)
+            except roslaunch.xmlloader.XmlParseException as e:
+                raise roslaunch.core.RLException(
+                    'Launch string: %s\nException: %s' % (launch_str, e))
+            except roslaunch.loader.LoadException as e:
+                raise roslaunch.core.RLException(
+                    'Launch string: %s\nException: %s' % (launch_str, e))
+    # choose machines for the nodes
+    if assign_machines:
+        config.assign_machines()
+    return config
+
+
+# overwrite load_config_default function for kinetic
+# see: https://github.com/ros/ros_comm/pull/1115
+roslaunch.config.load_config_default = _load_config_default
+
+
 class AppManager(object):
 
-    def __init__(self, robot_name, interface_master, app_list, exchange):
+    def __init__(
+            self, robot_name, interface_master, app_list,
+            exchange, plugins=None, enable_app_replacement=True,
+    ):
         self._robot_name = robot_name
         self._interface_master = interface_master
         self._app_list = app_list
         self._current_app = self._current_app_definition = None
         self._exchange = exchange
+        self._plugins = plugins
+        self._enable_app_replacement = enable_app_replacement
             
         rospy.loginfo("Starting app manager for %s"%self._robot_name)
 
@@ -94,7 +163,13 @@ class AppManager(object):
                                     local_pub_names=pub_names)
 
         self._launch = None
+        self._plugin_launch = None
         self._interface_sync = None
+        self._exit_code = None
+        self._stopped = None
+        self._current_plugins = None
+        self._plugin_context = None
+        self._start_time = None
 
         roslaunch.pmon._init_signal_handlers()
 
@@ -108,9 +183,10 @@ class AppManager(object):
     def shutdown(self):
         if self._api_sync:
             self._api_sync.stop()
-        if self._launch:
-            self._launch.shutdown()
+        if self._interface_sync:
             self._interface_sync.stop()
+        self._stopped = True
+        self.__stop_current()
 
     def _get_current_app(self):
         return self._current_app
@@ -135,7 +211,7 @@ class AppManager(object):
         if (self._exchange == None):
             return None
         if (req.remote_update):
-            print "UPDATE"
+            rospy.loginfo("UPDATE")
             if (not self._exchange.update()):
                 return None
         i_apps = self._exchange.get_installed_apps()
@@ -191,9 +267,15 @@ class AppManager(object):
         if self._current_app:
             if self._current_app_definition.name == req.name:
                 return StartAppResponse(started=True, message="app [%s] already started"%(req.name), namespace=self._app_interface)
+            elif not self._enable_app_replacement:
+                return StartAppResponse(
+                    started=False,
+                    message="app [%s] is denied because app [%s] is already running."
+                            % (req.name, self._current_app_definition.name),
+                    namespace=self._app_interface,
+                    error_code=StatusCodes.MULTIAPP_NOT_SUPPORTED)
             else:
                 self.stop_app(self._current_app_definition.name)
-            #return StartAppResponse(started=False, message="Please stop the running app before starting another app.", error_code=StatusCodes.MULTIAPP_NOT_SUPPORTED)
 
         # TODO: the app list has already loaded the App data.  We should use that instead for consistency
 
@@ -214,11 +296,71 @@ class AppManager(object):
             rospy.loginfo("Launching: %s"%(app.launch))
             self._status_pub.publish(AppStatus(AppStatus.INFO, 'launching %s'%(app.display_name)))
 
+            plugin_launch_files = []
+            if app.plugins:
+                self._current_plugins = []
+                if 'start_plugin_order' in app.plugin_order:
+                    plugin_names = [p['name'] for p in app.plugins]
+                    plugin_order = app.plugin_order['start_plugin_order']
+                    if len(set(plugin_names) - set(plugin_order)) > 0:
+                        rospy.logwarn(
+                            "Some plugins are defined in plugins but not written in start_plugin_order: {}"
+                            .format(set(plugin_names) - set(plugin_order)))
+                    app_plugins = []
+                    for plugin_name in plugin_order:
+                        if plugin_name not in plugin_names:
+                            rospy.logerr("app plugin '{}' not found in app file.".format(plugin_name))
+                            continue
+                        app_plugins.append(
+                            app.plugins[plugin_names.index(plugin_name)])
+                else:
+                    app_plugins = app.plugins
+                for app_plugin in app_plugins:
+                    app_plugin_type = app_plugin['type']
+                    try:
+                        plugin = next(
+                            p for p in self._plugins if p['name'] == app_plugin_type)
+                        self._current_plugins.append((app_plugin, plugin))
+                        if 'launch' in plugin and plugin['launch']:
+                            plugin_launch_file = find_resource(plugin['launch'])
+                            launch_args = {}
+                            if 'launch_args' in app_plugin:
+                                launch_args.update(app_plugin['launch_args'])
+                            if 'launch_arg_yaml' in app_plugin:
+                                with open(app_plugin['launch_arg_yaml']) as yaml_f:
+                                    yaml_launch_args = yaml.load(yaml_f)
+                                for k, v in yaml_launch_args.items():
+                                    if k in launch_args:
+                                        rospy.logwarn("'{}' is set both in launch_args and launch_arg_yaml".format(k))
+                                        rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, launch_args[k], v))
+                                    launch_args[k] = v
+                            plugin_launch_args = []
+                            for k, v in launch_args.items():
+                                if isinstance(v, list):
+                                    v = " ".join(map(str, v))
+                                plugin_launch_args.append("{}:={}".format(k, v))
+                            rospy.loginfo(
+                                "Launching plugin: {} {}".format(
+                                    plugin_launch_file, plugin_launch_args))
+                            plugin_launch_files.append(
+                                (plugin_launch_file, plugin_launch_args))
+                    except StopIteration:
+                        rospy.logerr(
+                            'There is no available app_manager plugin: {}'
+                            .format(app_plugin_type))
+
             #TODO:XXX This is a roslaunch-caller-like abomination.  Should leverage a true roslaunch API when it exists.
-            self._launch = roslaunch.parent.ROSLaunchParent(rospy.get_param("/run_id"),
-                                                            [app.launch], is_core=False,
-                                                            process_listeners=())
+            self._launch = roslaunch.parent.ROSLaunchParent(
+                rospy.get_param("/run_id"), [app.launch],
+                is_core=False, process_listeners=())
+            if len(plugin_launch_files) > 0:
+                self._plugin_launch = roslaunch.parent.ROSLaunchParent(
+                    rospy.get_param("/run_id"), plugin_launch_files,
+                    is_core=False, process_listeners=())
+
             self._launch._load_config()
+            if self._plugin_launch:
+                self._plugin_launch._load_config()
 
             #TODO: convert to method
             for N in self._launch.config.nodes:
@@ -226,7 +368,50 @@ class AppManager(object):
                     N.remap_args.append((t, self._app_interface + '/' + t))
                 for t in app.interface.subscribed_topics.keys():
                     N.remap_args.append((t, self._app_interface + '/' + t))
+
+            # run plugin modules first
+            if self._current_plugins:
+                self._plugin_context = {}
+                for app_plugin, plugin in self._current_plugins:
+                    if 'module' in plugin and plugin['module']:
+                        plugin_args = {}
+                        start_plugin_args = {}
+                        if 'plugin_args' in app_plugin:
+                            plugin_args.update(app_plugin['plugin_args'])
+                        if 'plugin_arg_yaml' in app_plugin:
+                            with open(app_plugin['plugin_arg_yaml']) as yaml_f:
+                                yaml_plugin_args = yaml.load(yaml_f)
+                            for k, v in yaml_plugin_args.items():
+                                if k in plugin_args:
+                                    rospy.logwarn("'{}' is set both in plugin_args and plugin_arg_yaml".format(k))
+                                    rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, plugin_args[k], v))
+                                plugin_args[k] = v
+                        if 'start_plugin_args' in app_plugin:
+                            start_plugin_args.update(app_plugin['start_plugin_args'])
+                        if 'start_plugin_arg_yaml' in app_plugin:
+                            with open(app_plugin['start_plugin_arg_yaml']) as yaml_f:
+                                yaml_plugin_args = yaml.load(yaml_f)
+                            for k, v in yaml_plugin_args.items():
+                                if k in start_plugin_args:
+                                    rospy.logwarn("'{}' is set both in start_plugin_args and start_plugin_arg_yaml".format(k))
+                                    rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, start_plugin_args[k], v))
+                                start_plugin_args[k] = v
+                        plugin_args.update(start_plugin_args)
+                        mod = __import__(plugin['module'].split('.')[0])
+                        for sub_mod in plugin['module'].split('.')[1:]:
+                            mod = getattr(mod, sub_mod)
+                        start_plugin_attr = getattr(
+                            mod, 'app_manager_start_plugin')
+                        self._plugin_context = start_plugin_attr(
+                            app, self._plugin_context, plugin_args)
+            # then, start plugin launches
+            if self._plugin_launch:
+                self._plugin_launch.start()
+
+            # finally launch main launch
             self._launch.start()
+            if app.timeout is not None:
+                self._start_time = rospy.Time.now()
 
             fp = [self._app_interface + '/' + x for x in app.interface.subscribed_topics.keys()]
             lp = [self._app_interface + '/' + x for x in app.interface.published_topics.keys()]
@@ -249,16 +434,92 @@ class AppManager(object):
     
     def _stop_current(self):
         try:
-            self._launch.shutdown()
+            self.__stop_current()
         finally:
             self._launch = None
+            self._plugin_launch = None
+            self._exit_code = None
+            self._stopped = None
+            self._current_plugins = None
+            self._plugin_context = None
+            self._start_time = None
         try:
             self._interface_sync.stop()
         finally:
             self._interface_sync = None
 
+    def __stop_current(self):
+        if self._api_sync:
+            self._api_sync.stop()
+        if self._launch:
+            self._launch.shutdown()
+            if (self._exit_code is None
+                    and len(self._launch.pm.dead_list) > 0):
+                self._exit_code = self._launch.pm.dead_list[0].exit_code
+            if self._exit_code > 0:
+                rospy.logerr(
+                    "App stopped with exit code: {}".format(self._exit_code))
+        if self._plugin_launch:
+            self._plugin_launch.shutdown()
+        if self._current_plugins:
+            self._plugin_context['exit_code'] = self._exit_code
+            self._plugin_context['stopped'] = self._stopped
+            if 'stop_plugin_order' in self._current_app_definition.plugin_order:
+                plugin_names = [p['name'] for p in self._current_app_definition.plugins]
+                plugin_order = self._current_app_definition.plugin_order['stop_plugin_order']
+                if len(set(plugin_names) - set(plugin_order)) > 0:
+                    rospy.logwarn(
+                        "Some plugins are defined in plugins but not written in stop_plugin_order: {}"
+                        .format(set(plugin_names) - set(plugin_order)))
+                current_plugins = []
+                for plugin_name in plugin_order:
+                    if plugin_name not in plugin_names:
+                        rospy.logerr("app plugin '{}' not found in app file.".format(plugin_name))
+                        continue
+                    current_plugin_names = [p['name'] for p, _ in self._current_plugins]
+                    if plugin_name not in current_plugin_names:
+                        rospy.logwarn("app plugin '{}' is not running, so skip stopping".format(plugin_name))
+                        continue
+                    current_plugins.append(
+                        self._current_plugins[current_plugin_names.index(plugin_name)])
+            else:
+                current_plugins = self._current_plugins
+            for app_plugin, plugin in current_plugins:
+                if 'module' in plugin and plugin['module']:
+                    plugin_args = {}
+                    stop_plugin_args = {}
+                    if 'plugin_args' in app_plugin:
+                        plugin_args.update(app_plugin['plugin_args'])
+                    if 'plugin_arg_yaml' in app_plugin:
+                        with open(app_plugin['plugin_arg_yaml']) as yaml_f:
+                            yaml_plugin_args = yaml.load(yaml_f)
+                        for k, v in yaml_plugin_args.items():
+                            if k in plugin_args:
+                                rospy.logwarn("'{}' is set both in plugin_args and plugin_arg_yaml".format(k))
+                                rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, plugin_args[k], v))
+                            plugin_args[k] = v
+                    if 'stop_plugin_args' in app_plugin:
+                        stop_plugin_args.update(app_plugin['stop_plugin_args'])
+                    if 'stop_plugin_arg_yaml' in app_plugin:
+                        with open(app_plugin['stop_plugin_arg_yaml']) as yaml_f:
+                            yaml_plugin_args = yaml.load(yaml_f)
+                        for k, v in yaml_plugin_args.items():
+                            if k in stop_plugin_args:
+                                rospy.logwarn("'{}' is set both in stop_plugin_args and stop_plugin_arg_yaml".format(k))
+                                rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, stop_plugin_args[k], v))
+                            stop_plugin_args[k] = v
+                    plugin_args.update(stop_plugin_args)
+                    mod = __import__(plugin['module'].split('.')[0])
+                    for sub_mod in plugin['module'].split('.')[1:]:
+                        mod = getattr(mod, sub_mod)
+                    stop_plugin_attr = getattr(mod, 'app_manager_stop_plugin')
+                    self._plugin_context = stop_plugin_attr(
+                        self._current_app_definition,
+                        self._plugin_context, plugin_args)
+
     def handle_stop_app(self, req):
         rospy.loginfo("handle stop app: %s"%(req.name))
+        self._stopped = True
         return self.stop_app(req.name)
 
     def handle_reload_app_list(self, req=None):
@@ -275,13 +536,30 @@ class AppManager(object):
         while self._launch:
             time.sleep(0.1)
             launch = self._launch
+            timeout = self._current_app_definition.timeout
+            appname = self._current_app_definition.name
+            now = rospy.Time.now()
             if launch:
                 pm = launch.pm
                 if pm:
+                    procs = pm.procs[:]
+                    if len(procs) > 0:
+                        if any([p.required for p in procs]):
+                            exit_codes = [
+                                p.exit_code for p in procs if p.required]
+                            self._exit_code = max(exit_codes)
                     if pm.done:
                         time.sleep(1.0)
-                        self.stop_app(self._current_app_definition.name)
+                        self.stop_app(appname)
                         break
+                if (timeout is not None and
+                        self._start_time is not None and
+                        (now - self._start_time).to_sec() > timeout):
+                    self.stop_app(appname)
+                    rospy.logerr(
+                        'app {} is stopped because of timeout: {}s'.format(
+                            appname, timeout))
+                    break
 
 
 
