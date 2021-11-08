@@ -56,7 +56,7 @@ def get_default_applist_directory():
 
 def dict_to_KeyValue(d):
     l = []
-    for k, v in d.iteritems():
+    for k, v in d.items():
         l.append(KeyValue(k, str(v)))
     return l
 
@@ -130,8 +130,10 @@ class InstalledFile(object):
 
     def get_available_apps(self, platform=None):
         if platform is not None:
-            return filter(lambda app: app.platform == platform,
-                          self.available_apps)
+            available_apps = filter(
+                lambda app: app.platform in [platform, 'all'],
+                self.available_apps)
+            return available_apps
         else:
             return self.available_apps
 
