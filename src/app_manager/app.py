@@ -75,9 +75,11 @@ class Client(object):
                
 class AppDefinition(object):
     __slots__ = ['name', 'display_name', 'description', 'platform',
-                 'launch', 'interface', 'clients', 'icon']
+                 'launch', 'interface', 'clients', 'icon', 'plugins', 'plugin_order',
+                 'timeout']
     def __init__(self, name, display_name, description, platform,
-                 launch, interface, clients, icon=None):
+                 launch, interface, clients, icon=None, plugins=None, plugin_order=None,
+                 timeout=None):
         self.name = name
         self.display_name = display_name
         self.description = description
@@ -86,6 +88,9 @@ class AppDefinition(object):
         self.interface = interface
         self.clients = clients
         self.icon = icon
+        self.plugins = plugins
+        self.plugin_order = plugin_order
+        self.timeout = timeout
 
     def __repr__(self):
         d = {}
@@ -222,6 +227,54 @@ def _AppDefinition_load_clients_entry(app_data, appfile="UNKNOWN"):
         clients.append(Client(client_type, manager_data, app_data))
     return clients
 
+
+def _AppDefinition_load_plugins_entry(app_data, appfile="UNKNOWN"):
+    """
+    @raise InvalidAppException: if app definition is invalid.
+    """
+    # load/validate launch entry
+    try:
+        plugins = app_data.get('plugins', '')
+        if plugins == '':
+            return None
+        for plugin in plugins:
+            for key in ['launch_args', 'plugin_args', 'start_plugin_args', 'stop_plugin_args']:
+                if key in plugin and not type(plugin[key]) == dict:
+                    raise InvalidAppException("Malformed appfile [%s]: plugin data(%s) must be a map"%(appfile, key))
+        return plugins
+    except ValueError as e:
+        raise InvalidAppException("Malformed appfile [%s]: bad plugins entry: %s"%(appfile, e))
+
+
+def _AppDefinition_load_plugin_order_entry(app_data, appfile="UNKNOWN"):
+    """
+    @raise InvalidAppException: if app definition is invalid.
+    """
+    # load/validate launch entry
+    try:
+        plugin_order = app_data.get('plugin_order', '')
+        if plugin_order == '':
+            return []
+        return plugin_order
+    except ValueError as e:
+        raise InvalidAppException("Malformed appfile [%s]: bad plugin_order entry: %s"%(appfile, e))
+
+
+def _AppDefinition_load_timeout_entry(app_data, appfile="UNKNOWN"):
+    """
+    @raise InvalidAppException: if app definition is invalid.
+    """
+    # load/validate launch entry
+    try:
+        timeout = app_data.get('timeout', '')
+        if timeout == '':
+            return None
+        return timeout
+    except ValueError as e:
+        raise InvalidAppException("Malformed appfile [%s]: bad timeout entry: %s"%(appfile, e))
+
+
+
 def load_AppDefinition_from_file(appfile, appname):
     """
     @raise InvalidAppExcetion: if app definition is invalid.
@@ -242,9 +295,13 @@ def load_AppDefinition_from_file(appfile, appname):
         interface = _AppDefinition_load_interface_entry(app_data, appfile)
         clients = _AppDefinition_load_clients_entry(app_data, appfile)
         icon = _AppDefinition_load_icon_entry(app_data, appfile)
+        plugins = _AppDefinition_load_plugins_entry(app_data, appfile)
+        plugin_order = _AppDefinition_load_plugin_order_entry(app_data, appfile)
+        timeout = _AppDefinition_load_timeout_entry(app_data, appfile)
 
     return AppDefinition(appname, display_name, description, platform,
-                         launch, interface, clients, icon)
+                         launch, interface, clients, icon,
+                         plugins, plugin_order, timeout)
     
 def load_AppDefinition_by_name(appname):
     """

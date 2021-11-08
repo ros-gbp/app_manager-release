@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Software License Agreement (BSD License)
 #
 # Copyright (c) 2011, Willow Garage, Inc.
@@ -29,13 +30,48 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-#
-# Revision $Id: __init__.py 14948 2011-09-07 19:25:54Z pratkanis $
 
-from .app import AppDefinition
-from .app_manager import AppManager
-from .app_list import AppList, get_default_applist_directory
-from .app_manager_plugin import AppManagerPlugin
-from .exchange import Exchange
-from .exceptions import AppException, NotFoundException, \
-     InvalidAppException, LaunchException, InternalAppException
+PKG = 'app_manager'
+
+import os
+import sys
+import time
+import unittest
+
+import rospy
+import rostest
+import rosunit
+
+from app_manager.srv import *
+
+class StopAppTest(unittest.TestCase):
+
+    def __init__(self, *args):
+        super(StopAppTest, self).__init__(*args)
+        rospy.init_node('stop_app_test')
+
+    def setUp(self):
+        rospy.wait_for_service('/robot/list_apps')
+        rospy.wait_for_service('/robot/stop_app')
+        self.list = rospy.ServiceProxy('/robot/list_apps', ListApps)
+        self.stop = rospy.ServiceProxy('/robot/stop_app', StopApp)
+
+    def test_stop_app(self):
+        list_req = ListAppsRequest()
+        list_res = ListAppsResponse()
+        while not 'app_manager/appA' in list(map(lambda x: x.name, list_res.running_apps)):
+            list_res = self.list.call(list_req)
+            rospy.logwarn("received 'list_apps' {}".format(list_res))
+            time.sleep(1)
+
+        stop_req = StopAppRequest(name='app_manager/appA')
+        stop_res = self.stop.call(stop_req)
+        rospy.logwarn("received 'stop_app'  {}".format(stop_res))
+        self.assertEqual(stop_res.stopped, True)
+
+if __name__ == '__main__':
+    try:
+        rostest.run('stop_app_test', PKG, StopAppTest, sys.argv)
+    except KeyboardInterrupt:
+        pass
+    print("{} exiting".format(PKG))
