@@ -34,6 +34,7 @@
 
 # author: leibs
 import sys
+import os
 
 if sys.version_info[0] == 3:
     import _thread as thread  # python3 renamed from thread to _thread
@@ -167,8 +168,10 @@ class AppManager(object):
         self._interface_sync = None
         self._exit_code = None
         self._stopped = None
+        self._stopping = None
         self._current_plugins = None
         self._plugin_context = None
+        self._plugin_insts = None
         self._start_time = None
 
         roslaunch.pmon._init_signal_handlers()
@@ -293,8 +296,17 @@ class AppManager(object):
         try:
             self._set_current_app(App(name=appname), app)
 
-            rospy.loginfo("Launching: %s"%(app.launch))
             self._status_pub.publish(AppStatus(AppStatus.INFO, 'launching %s'%(app.display_name)))
+
+            if len(req.args) == 0:
+                launch_files = [app.launch]
+                rospy.loginfo("Launching: {}".format(app.launch))
+            else:
+                app_launch_args = []
+                for arg in req.args:
+                    app_launch_args.append("{}:={}".format(arg.key, arg.value))
+                launch_files = [(app.launch, app_launch_args)]
+                rospy.loginfo("Launching: {} {}".format(app.launch, app_launch_args))
 
             plugin_launch_files = []
             if app.plugins:
@@ -351,7 +363,7 @@ class AppManager(object):
 
             #TODO:XXX This is a roslaunch-caller-like abomination.  Should leverage a true roslaunch API when it exists.
             self._launch = roslaunch.parent.ROSLaunchParent(
-                rospy.get_param("/run_id"), [app.launch],
+                rospy.get_param("/run_id"), launch_files,
                 is_core=False, process_listeners=())
             if len(plugin_launch_files) > 0:
                 self._plugin_launch = roslaunch.parent.ROSLaunchParent(
@@ -372,6 +384,7 @@ class AppManager(object):
             # run plugin modules first
             if self._current_plugins:
                 self._plugin_context = {}
+                self._plugin_insts = {}
                 for app_plugin, plugin in self._current_plugins:
                     if 'module' in plugin and plugin['module']:
                         plugin_args = {}
@@ -400,10 +413,10 @@ class AppManager(object):
                         mod = __import__(plugin['module'].split('.')[0])
                         for sub_mod in plugin['module'].split('.')[1:]:
                             mod = getattr(mod, sub_mod)
-                        start_plugin_attr = getattr(
-                            mod, 'app_manager_start_plugin')
-                        self._plugin_context = start_plugin_attr(
+                        plugin_inst = mod()
+                        plugin_inst.app_manager_start_plugin(
                             app, self._plugin_context, plugin_args)
+                        self._plugin_insts[plugin['module']] = plugin_inst
             # then, start plugin launches
             if self._plugin_launch:
                 self._plugin_launch.start()
@@ -423,25 +436,33 @@ class AppManager(object):
             return StartAppResponse(started=True, message="app [%s] started"%(appname), namespace=self._app_interface)
         
         except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
             try:
                 # attempt to kill any launched resources
                 self._stop_current()
             except:
                 pass
+            finally:
+                self._set_current_app(None, None)
             self._status_pub.publish(AppStatus(AppStatus.INFO, 'app start failed'))
-            rospy.logerr("app start failed")
-            return StartAppResponse(started=False, message="internal error [%s]"%(str(e)), error_code=StatusCodes.INTERNAL_ERROR)
+            rospy.logerr(
+                "app start failed [{}, line {}: {}]".format(fname, exc_tb.tb_lineno, str(e)))
+            return StartAppResponse(started=False, message="internal error [%s, line %d: %s]"%(fname, exc_tb.tb_lineno, str(e)), error_code=StatusCodes.INTERNAL_ERROR)
     
     def _stop_current(self):
         try:
+            self._stopping = True
             self.__stop_current()
         finally:
             self._launch = None
             self._plugin_launch = None
             self._exit_code = None
             self._stopped = None
+            self._stopping = None
             self._current_plugins = None
             self._plugin_context = None
+            self._plugin_insts = None
             self._start_time = None
         try:
             self._interface_sync.stop()
@@ -456,7 +477,7 @@ class AppManager(object):
             if (self._exit_code is None
                     and len(self._launch.pm.dead_list) > 0):
                 self._exit_code = self._launch.pm.dead_list[0].exit_code
-            if self._exit_code > 0:
+            if not self._exit_code is None and self._exit_code > 0:
                 rospy.logerr(
                     "App stopped with exit code: {}".format(self._exit_code))
         if self._plugin_launch:
@@ -509,11 +530,14 @@ class AppManager(object):
                                 rospy.logwarn("'{}' is overwritten: {} -> {}".format(k, stop_plugin_args[k], v))
                             stop_plugin_args[k] = v
                     plugin_args.update(stop_plugin_args)
-                    mod = __import__(plugin['module'].split('.')[0])
-                    for sub_mod in plugin['module'].split('.')[1:]:
-                        mod = getattr(mod, sub_mod)
-                    stop_plugin_attr = getattr(mod, 'app_manager_stop_plugin')
-                    self._plugin_context = stop_plugin_attr(
+                    if plugin['module'] in self._plugin_insts:
+                        plugin_inst = self._plugin_insts[plugin['module']]
+                    else:
+                        mod = __import__(plugin['module'].split('.')[0])
+                        for sub_mod in plugin['module'].split('.')[1:]:
+                            mod = getattr(mod, sub_mod)
+                        plugin_inst = mod()
+                    plugin_inst.app_manager_stop_plugin(
                         self._current_app_definition,
                         self._plugin_context, plugin_args)
 
@@ -550,11 +574,13 @@ class AppManager(object):
                             self._exit_code = max(exit_codes)
                     if pm.done:
                         time.sleep(1.0)
-                        self.stop_app(appname)
+                        if not self._stopping:
+                            self.stop_app(appname)
                         break
                 if (timeout is not None and
                         self._start_time is not None and
                         (now - self._start_time).to_sec() > timeout):
+                    self._stopped = True
                     self.stop_app(appname)
                     rospy.logerr(
                         'app {} is stopped because of timeout: {}s'.format(
@@ -594,7 +620,9 @@ class AppManager(object):
                     self._set_current_app(None, None)
 
         except Exception as e:
-            rospy.logerr("handle stop app: internal error %s"%(e))
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+            rospy.logerr("handle stop app: internal error [%s, line %d: %s]"%(fname, exc_tb.tb_lineno, str(e)))
             resp.error_code = StatusCodes.INTERNAL_ERROR
             resp.message = "internal error: %s"%(str(e))
             
