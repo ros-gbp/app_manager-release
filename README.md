@@ -1,3 +1,26 @@
+## app_manager (noetic) - 1.3.0-1
+
+The packages in the `app_manager` repository were released into the `noetic` distro by running `/usr/bin/bloom-release app_manager --track noetic --rosdistro noetic` on `Mon, 08 Nov 2021 11:05:33 -0000`
+
+The `app_manager` package was released.
+
+Version of package(s) in repository `app_manager`:
+
+- upstream repository: https://github.com/pr2/app_manager.git
+- release repository: https://github.com/ros-gbp/app_manager-release.git
+- rosdistro version: `1.2.0-1`
+- old version: `1.2.0-1`
+- new version: `1.3.0-1`
+
+Versions of tools used:
+
+- bloom version: `0.10.7`
+- catkin_pkg version: `0.4.23`
+- rosdep version: `0.21.0`
+- rosdistro version: `0.8.3`
+- vcstools version: `0.1.42`
+
+
 ## app_manager (melodic) - 1.3.0-1
 
 The packages in the `app_manager` repository were released into the `melodic` distro by running `/usr/bin/bloom-release app_manager --track melodic --rosdistro melodic` on `Mon, 08 Nov 2021 11:03:20 -0000`
